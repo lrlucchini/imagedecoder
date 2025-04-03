@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Pixel Stepper</title>
+    <title>Image Pixel Stepper with Animation</title>
     <style>
         /* Basic styling for the page */
         body {
@@ -33,16 +33,24 @@
             border-radius: 5px;
             display: flex;
             flex-wrap: wrap; /* Allow controls to wrap on smaller screens */
-            gap: 15px; /* Spacing between controls */
+            gap: 10px 15px; /* Row and column gap */
             align-items: center;
             justify-content: center;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         /* Styling for labels, step display, and buttons */
         .controls span,
-        .controls button {
+        .controls button,
+        .controls label {
              margin: 0 5px;
-             font-size: 1em; /* Slightly larger font for controls */
+             font-size: 0.9em; /* Adjusted font size */
+             white-space: nowrap; /* Prevent wrapping on buttons/labels */
+        }
+        /* Styling for the range slider */
+        .controls input[type="range"] {
+            width: 120px; /* Slightly smaller slider */
+            cursor: pointer;
+            vertical-align: middle;
         }
         /* Spacing for the file input */
         #imageLoader {
@@ -54,7 +62,7 @@
         }
         /* General button styling */
          button {
-            padding: 10px 20px; /* Larger button */
+            padding: 8px 15px; /* Adjusted padding */
             cursor: pointer;
             border: 1px solid #aaa;
             border-radius: 3px;
@@ -77,25 +85,39 @@
         /* Style for step counter display */
         #stepCounterDisplay {
             font-weight: bold;
-            min-width: 80px; /* Ensure space for counter */
+            min-width: 60px; /* Adjusted width */
             text-align: right;
+            display: inline-block; /* Align with other controls */
+            vertical-align: middle;
+        }
+        #speedValue {
+             font-weight: bold;
+             min-width: 25px;
+             display: inline-block;
+             text-align: right;
+             vertical-align: middle;
         }
 
     </style>
 </head>
 <body>
 
-    <h1>Image Pixel Stepper</h1>
+    <h1>Image Pixel Stepper & Animator</h1>
 
-    <p>Upload a JPG or PNG image. Click "Next Step" to iterate the transformation.</p>
+    <p>Upload image. Use "Next Step" or animation controls to iterate.</p>
 
     <input type="file" id="imageLoader" accept="image/jpeg, image/png">
 
     <div class="controls">
+        <button id="playPauseButton" disabled>Play</button>
+        <button id="directionButton" disabled>Forward</button>
+        <label for="speedSlider">Speed:</label>
+        <input type="range" id="speedSlider" min="1" max="50" value="5" disabled>
+        <span id="speedValue">5</span>
         <button id="nextStepButton" disabled>Next Step</button>
+        <button id="resetButton" disabled>Reset Steps</button>
         <span>Step:</span>
         <span id="stepCounterDisplay">0</span>
-         <button id="resetButton" disabled>Reset Steps</button>
     </div>
 
     <canvas id="canvas" width="300" height="150"></canvas>
@@ -105,194 +127,254 @@
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
+        // --- Control Elements ---
         const nextStepButton = document.getElementById('nextStepButton');
         const resetButton = document.getElementById('resetButton');
         const stepCounterDisplay = document.getElementById('stepCounterDisplay');
+        const playPauseButton = document.getElementById('playPauseButton');
+        const directionButton = document.getElementById('directionButton');
+        const speedSlider = document.getElementById('speedSlider');
+        const speedValue = document.getElementById('speedValue');
 
-        // State variables
+
+        // --- State Variables ---
         let originalImageData = null; // Stores the raw pixel data of the original uploaded image
         let imgWidth = 0;             // Width of the loaded image
         let imgHeight = 0;            // Height of the loaded image
         let stepCounter = 0;          // Counter for transformation steps
         let imageLoaded = false;      // Flag to track if an image has been successfully loaded
+        // Animation State
+        let isPlaying = false;        // Flag for animation state
+        let direction = 1;            // Animation direction (1: forward, -1: backward)
+        let speed = parseInt(speedSlider.value, 10); // Animation speed
+        let animationFrameId = null;  // ID for requestAnimationFrame
 
-        // Threshold for considering a pixel "white" (0-255). Using lenient threshold.
-        const WHITE_THRESHOLD = 249;
-        // Define allowed image types
+        // --- Constants ---
+        const WHITE_THRESHOLD = 249; // Using lenient threshold
         const ALLOWED_TYPES = ['image/jpeg', 'image/png'];
 
         // --- Helper Functions ---
 
-        /**
-         * Calculates positive modulo.
-         * @param {number} n - The dividend.
-         * @param {number} m - The divisor.
-         * @returns {number} The positive remainder of n divided by m.
-         */
+        /** Calculates positive modulo. */
         function positiveModulo(n, m) {
             if (m === 0) return 0;
             m = Math.abs(m);
             return ((n % m) + m) % m;
         }
 
-        /**
-         * Checks if a pixel's RGB values are >= the white threshold.
-         * @param {number} r - Red component (0-255).
-         * @param {number} g - Green component (0-255).
-         * @param {number} b - Blue component (0-255).
-         * @returns {boolean} True if the pixel is considered white, false otherwise.
-         */
+        /** Checks if a pixel is white (using >= threshold). */
         function isWhite(r, g, b) {
-            // Using inclusive check >=
             return r >= WHITE_THRESHOLD && g >= WHITE_THRESHOLD && b >= WHITE_THRESHOLD;
         }
 
         // --- Event Listeners ---
 
         imageLoader.addEventListener('change', handleImageUpload);
+        // Step Controls
         nextStepButton.addEventListener('click', handleNextStep);
         resetButton.addEventListener('click', handleResetSteps);
+        // Animation Controls
+        playPauseButton.addEventListener('click', togglePlayPause);
+        directionButton.addEventListener('click', toggleDirection);
+        speedSlider.addEventListener('input', handleSpeedChange);
 
 
         // --- Core Functions ---
 
-        /**
-         * Handles the image file upload process.
-         * @param {Event} event - The file input change event.
-         */
+        /** Handles image upload. */
         function handleImageUpload(event) {
             const file = event.target.files[0];
             if (!file || !ALLOWED_TYPES.includes(file.type)) {
                 alert('Please select a JPG or PNG image file.');
-                resetApp(); // Full reset if file is invalid
+                resetApp();
                 return;
             }
 
             const reader = new FileReader();
-
             reader.onload = function(e) {
                 const img = new Image();
                 img.onload = function() {
+                    stopAnimation(); // Stop animation if running
                     imgWidth = img.naturalWidth;
                     imgHeight = img.naturalHeight;
                     canvas.width = imgWidth;
                     canvas.height = imgHeight;
-
                     ctx.drawImage(img, 0, 0, imgWidth, imgHeight);
 
                     try {
                         originalImageData = ctx.getImageData(0, 0, imgWidth, imgHeight);
                         imageLoaded = true;
-                        stepCounter = 0; // Reset step counter for new image
+                        stepCounter = 0; // Reset steps
                         updateStepDisplay();
-                        enableControls();
-                        // Apply initial transformation (step 0)
-                        transformImage(stepCounter);
+                        enableControls(); // Enable all controls
+                        transformImage(stepCounter); // Show initial state (step 0)
                     } catch (error) {
                         console.error("Error getting image data:", error);
                         if (error.name === 'SecurityError') {
-                           alert("Error accessing image data. If running locally, try using a simple local server instead of opening the HTML file directly.");
+                           alert("Error accessing image data. If running locally, try using a simple local server.");
                         } else {
                            alert("Could not process image data.");
                         }
-                        resetApp(); // Full reset on error
+                        resetApp();
                     }
                 }
-                img.onerror = function() {
-                    alert('Failed to load the image.');
-                    resetApp();
-                }
+                img.onerror = () => { alert('Failed to load the image.'); resetApp(); }
                 img.src = e.target.result;
             }
-            reader.onerror = function() {
-                 alert('Failed to read the file.');
-                 resetApp();
-            }
+            reader.onerror = () => { alert('Failed to read the file.'); resetApp(); }
             reader.readAsDataURL(file);
         }
 
-        /** Handles the click of the "Next Step" button. */
+        /** Handles manual step forward. */
         function handleNextStep() {
             if (!imageLoaded) return;
+            stopAnimation(); // Stop animation if user steps manually
             stepCounter++;
             updateStepDisplay();
             transformImage(stepCounter);
         }
 
-        /** Handles the click of the "Reset Steps" button. */
+        /** Handles reset steps button. */
         function handleResetSteps() {
              if (!imageLoaded) return;
+             stopAnimation(); // Stop animation on reset
              stepCounter = 0;
              updateStepDisplay();
              transformImage(stepCounter); // Redraw at step 0
         }
 
-        /** Updates the step counter display on the page. */
+        /** Updates step counter display. */
         function updateStepDisplay() {
             stepCounterDisplay.textContent = stepCounter;
+        }
+
+        /** Handles speed slider change. */
+        function handleSpeedChange(event) {
+            speed = parseInt(event.target.value, 10);
+            speedValue.textContent = speed;
+        }
+
+        /** Toggles play/pause state. */
+        function togglePlayPause() {
+            if (!imageLoaded) return;
+            isPlaying = !isPlaying;
+            if (isPlaying) {
+                playPauseButton.textContent = 'Pause';
+                startAnimation();
+            } else {
+                playPauseButton.textContent = 'Play';
+                stopAnimation();
+            }
+        }
+
+        /** Toggles animation direction. */
+        function toggleDirection() {
+            if (!imageLoaded) return;
+            direction *= -1;
+            directionButton.textContent = direction === 1 ? 'Forward' : 'Backward';
+            // No need to immediately update frame if paused, step buttons handle that
+        }
+
+        /** Starts the animation loop. */
+        function startAnimation() {
+            if (!isPlaying || !imageLoaded) return; // Double check
+            if (animationFrameId) { // Prevent multiple loops
+                cancelAnimationFrame(animationFrameId);
+            }
+
+            function loop() {
+                if (!isPlaying) return; // Exit if paused during frame
+
+                // Update step counter based on speed and direction
+                // Note: speed directly multiplies steps per frame. High speed = large jumps.
+                stepCounter += direction * speed;
+
+                updateStepDisplay();
+                transformImage(stepCounter);
+
+                animationFrameId = requestAnimationFrame(loop); // Request next frame
+            }
+            animationFrameId = requestAnimationFrame(loop); // Start the loop
+        }
+
+        /** Stops the animation loop. */
+        function stopAnimation() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+            // Only change state if it was actually playing
+            if (isPlaying) {
+                 isPlaying = false;
+                 if (imageLoaded) { // Update button text only if controls should be active
+                    playPauseButton.textContent = 'Play';
+                 }
+            }
         }
 
 
          /** Resets the entire application state. */
          function resetApp() {
+            stopAnimation(); // Make sure animation is stopped
             imageLoaded = false;
             originalImageData = null;
             imgWidth = 0;
             imgHeight = 0;
             stepCounter = 0;
+            // Reset animation state vars
+            isPlaying = false;
+            direction = 1;
+            speed = 5; // Reset to default speed
+            animationFrameId = null;
+
             canvas.width = 300;
             canvas.height = 150;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             drawPlaceholder();
-            disableControls();
+            disableControls(); // Disable all controls
             updateStepDisplay();
+            // Reset control displays
+            speedSlider.value = speed;
+            speedValue.textContent = speed;
+            playPauseButton.textContent = 'Play';
+            directionButton.textContent = 'Forward';
             imageLoader.value = '';
          }
 
-         /** Resets only the step count and redraws step 0. */
-         function resetStepsOnly() {
-             if (!imageLoaded) return;
-             stepCounter = 0;
-             updateStepDisplay();
-             transformImage(stepCounter); // Redraw at step 0
-         }
 
-
-        /** Enables the control buttons. */
+        /** Enables all control buttons and slider. */
         function enableControls() {
             nextStepButton.disabled = false;
             resetButton.disabled = false;
+            playPauseButton.disabled = false;
+            directionButton.disabled = false;
+            speedSlider.disabled = false;
         }
 
-        /** Disables the control buttons. */
+        /** Disables all control buttons and slider. */
          function disableControls() {
             nextStepButton.disabled = true;
             resetButton.disabled = true;
+            playPauseButton.disabled = true;
+            directionButton.disabled = true;
+            speedSlider.disabled = true;
          }
 
 
-        /**
-         * Performs the core image transformation for a specific step count.
-         * Uses the ORIGINAL formula interpretation (base target + step offset).
-         * @param {number} currentStep - The current step number to apply.
-         */
+        /** Performs the core image transformation for a specific step count. */
         function transformImage(currentStep) {
-            // Ensure image data is loaded and dimensions are valid
             if (!originalImageData || imgWidth === 0 || imgHeight === 0) {
                  console.warn("TransformImage called without valid image data or dimensions.");
                  return;
             }
 
             const originalData = originalImageData.data;
-            // Create a fresh ImageData buffer for the new frame
             const newImageData = ctx.createImageData(imgWidth, imgHeight);
             const newData = newImageData.data;
 
-            // Iterate through each pixel of the original image
             for (let y = 0; y < imgHeight; y++) {
                 for (let x = 0; x < imgWidth; x++) {
                     const originalIndex = (y * imgWidth + x) * 4;
-                    // Ensure we don't read past the buffer (though unlikely with correct loops)
                     if (originalIndex >= originalData.length - 3) continue;
 
                     const r = originalData[originalIndex];
@@ -300,43 +382,31 @@
                     const b = originalData[originalIndex + 2];
                     const a = originalData[originalIndex + 3];
 
-                    let targetX = x; // Default target is the original x position
+                    let targetX = x; // Default target is original x
 
-                    // Check if the original pixel is white
                     if (isWhite(r, g, b)) {
                         // *** ORIGINAL FORMULA IMPLEMENTATION ***
-                        // 1. Calculate the base target coordinate based on (y - x) % width
                         const baseTargetX = positiveModulo(y - x, imgWidth);
-
-                        // 2. Calculate final targetX by adding the current step count to the base target.
                         targetX = positiveModulo(baseTargetX + Math.floor(currentStep), imgWidth);
                     }
 
                     const targetY = y; // Y coordinate remains the same
                     const targetIndex = (targetY * imgWidth + targetX) * 4;
 
-                    // Copy original pixel data to the target location in the new image data
-                    // Ensure targetIndex is within bounds
                     if (targetIndex >= 0 && targetIndex < newData.length - 3) {
                         newData[targetIndex]     = r;
                         newData[targetIndex + 1] = g;
                         newData[targetIndex + 2] = b;
-                        newData[targetIndex + 3] = a; // Preserve original alpha
+                        newData[targetIndex + 3] = a;
                     } else {
-                         // Log if calculation results in out-of-bounds write
                          console.warn(`Calculated targetIndex ${targetIndex} out of bounds for pixel (x:${x}, y:${y}) -> targetX:${targetX} at step ${currentStep}`);
-                         // Fallback: Draw the pixel at its original location to avoid errors/blank spots
                          const fallbackIndex = (y * imgWidth + x) * 4;
                          if (fallbackIndex >= 0 && fallbackIndex < newData.length - 3) {
-                            newData[fallbackIndex] = r;
-                            newData[fallbackIndex + 1] = g;
-                            newData[fallbackIndex + 2] = b;
-                            newData[fallbackIndex + 3] = a;
+                            newData[fallbackIndex] = r; newData[fallbackIndex + 1] = g; newData[fallbackIndex + 2] = b; newData[fallbackIndex + 3] = a;
                          }
                     }
                 }
             }
-            // Draw the newly computed image data onto the canvas
             ctx.putImageData(newImageData, 0, 0);
         }
 
@@ -353,7 +423,7 @@
 
         // --- Initial Setup ---
         drawPlaceholder();
-        disableControls();
+        disableControls(); // Start with controls disabled
 
     </script>
 
