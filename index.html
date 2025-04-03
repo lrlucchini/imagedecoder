@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Pixel Stepper</title>
+    <style>
+        /* Basic styling for the page */
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        /* Style for the canvas where the image is displayed */
+        #canvas {
+            border: 1px solid black;
+            margin-top: 20px;
+            background-color: #ccc; /* Placeholder background */
+            max-width: 100%; /* Ensure canvas fits smaller screens */
+            height: auto; /* Maintain aspect ratio */
+            display: block; /* Prevents extra space below canvas */
+        }
+        /* Container for control elements */
+        .controls {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            display: flex;
+            flex-wrap: wrap; /* Allow controls to wrap on smaller screens */
+            gap: 15px; /* Spacing between controls */
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        /* Styling for labels, step display, and buttons */
+        .controls span,
+        .controls button {
+             margin: 0 5px;
+             font-size: 1em; /* Slightly larger font for controls */
+        }
+        /* Spacing for the file input */
+        #imageLoader {
+            margin-bottom: 15px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            background-color: #fff;
+        }
+        /* General button styling */
+         button {
+            padding: 10px 20px; /* Larger button */
+            cursor: pointer;
+            border: 1px solid #aaa;
+            border-radius: 3px;
+            background-color: #e0e0e0;
+            transition: background-color 0.2s ease; /* Smooth hover effect */
+        }
+        /* Button hover effect */
+        button:hover:not(:disabled) { /* Only apply hover when not disabled */
+            background-color: #d0d0d0;
+        }
+        /* Styling for disabled buttons */
+         button:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        /* Style for the main heading */
+        h1 {
+            color: #444;
+        }
+        /* Style for step counter display */
+        #stepCounterDisplay {
+            font-weight: bold;
+            min-width: 80px; /* Ensure space for counter */
+            text-align: right;
+        }
+
+    </style>
+</head>
+<body>
+
+    <h1>Image Pixel Stepper</h1>
+
+    <p>Upload a JPG or PNG image. Click "Next Step" to iterate the transformation.</p>
+
+    <input type="file" id="imageLoader" accept="image/jpeg, image/png">
+
+    <div class="controls">
+        <button id="nextStepButton" disabled>Next Step</button>
+        <span>Step:</span>
+        <span id="stepCounterDisplay">0</span>
+         <button id="resetButton" disabled>Reset Steps</button>
+    </div>
+
+    <canvas id="canvas" width="300" height="150"></canvas>
+    <script>
+        // Get references to HTML elements
+        const imageLoader = document.getElementById('imageLoader');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        const nextStepButton = document.getElementById('nextStepButton');
+        const resetButton = document.getElementById('resetButton');
+        const stepCounterDisplay = document.getElementById('stepCounterDisplay');
+
+        // State variables
+        let originalImageData = null; // Stores the raw pixel data of the original uploaded image
+        let imgWidth = 0;             // Width of the loaded image
+        let imgHeight = 0;            // Height of the loaded image
+        let stepCounter = 0;          // Counter for transformation steps
+        let imageLoaded = false;      // Flag to track if an image has been successfully loaded
+
+        // Threshold for considering a pixel "white" (0-255). Using lenient threshold.
+        const WHITE_THRESHOLD = 249;
+        // Define allowed image types
+        const ALLOWED_TYPES = ['image/jpeg', 'image/png'];
+
+        // --- Helper Functions ---
+
+        /**
+         * Calculates positive modulo.
+         * @param {number} n - The dividend.
+         * @param {number} m - The divisor.
+         * @returns {number} The positive remainder of n divided by m.
+         */
+        function positiveModulo(n, m) {
+            if (m === 0) return 0;
+            m = Math.abs(m);
+            return ((n % m) + m) % m;
+        }
+
+        /**
+         * Checks if a pixel's RGB values are >= the white threshold.
+         * @param {number} r - Red component (0-255).
+         * @param {number} g - Green component (0-255).
+         * @param {number} b - Blue component (0-255).
+         * @returns {boolean} True if the pixel is considered white, false otherwise.
+         */
+        function isWhite(r, g, b) {
+            // Using inclusive check >=
+            return r >= WHITE_THRESHOLD && g >= WHITE_THRESHOLD && b >= WHITE_THRESHOLD;
+        }
+
+        // --- Event Listeners ---
+
+        imageLoader.addEventListener('change', handleImageUpload);
+        nextStepButton.addEventListener('click', handleNextStep);
+        resetButton.addEventListener('click', handleResetSteps);
+
+
+        // --- Core Functions ---
+
+        /**
+         * Handles the image file upload process.
+         * @param {Event} event - The file input change event.
+         */
+        function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file || !ALLOWED_TYPES.includes(file.type)) {
+                alert('Please select a JPG or PNG image file.');
+                resetApp(); // Full reset if file is invalid
+                return;
+            }
+
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    imgWidth = img.naturalWidth;
+                    imgHeight = img.naturalHeight;
+                    canvas.width = imgWidth;
+                    canvas.height = imgHeight;
+
+                    ctx.drawImage(img, 0, 0, imgWidth, imgHeight);
+
+                    try {
+                        originalImageData = ctx.getImageData(0, 0, imgWidth, imgHeight);
+                        imageLoaded = true;
+                        stepCounter = 0; // Reset step counter for new image
+                        updateStepDisplay();
+                        enableControls();
+                        // Apply initial transformation (step 0)
+                        transformImage(stepCounter);
+                    } catch (error) {
+                        console.error("Error getting image data:", error);
+                        if (error.name === 'SecurityError') {
+                           alert("Error accessing image data. If running locally, try using a simple local server instead of opening the HTML file directly.");
+                        } else {
+                           alert("Could not process image data.");
+                        }
+                        resetApp(); // Full reset on error
+                    }
+                }
+                img.onerror = function() {
+                    alert('Failed to load the image.');
+                    resetApp();
+                }
+                img.src = e.target.result;
+            }
+            reader.onerror = function() {
+                 alert('Failed to read the file.');
+                 resetApp();
+            }
+            reader.readAsDataURL(file);
+        }
+
+        /** Handles the click of the "Next Step" button. */
+        function handleNextStep() {
+            if (!imageLoaded) return;
+            stepCounter++;
+            updateStepDisplay();
+            transformImage(stepCounter);
+        }
+
+        /** Handles the click of the "Reset Steps" button. */
+        function handleResetSteps() {
+             if (!imageLoaded) return;
+             stepCounter = 0;
+             updateStepDisplay();
+             transformImage(stepCounter); // Redraw at step 0
+        }
+
+        /** Updates the step counter display on the page. */
+        function updateStepDisplay() {
+            stepCounterDisplay.textContent = stepCounter;
+        }
+
+
+         /** Resets the entire application state. */
+         function resetApp() {
+            imageLoaded = false;
+            originalImageData = null;
+            imgWidth = 0;
+            imgHeight = 0;
+            stepCounter = 0;
+            canvas.width = 300;
+            canvas.height = 150;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawPlaceholder();
+            disableControls();
+            updateStepDisplay();
+            imageLoader.value = '';
+         }
+
+         /** Resets only the step count and redraws step 0. */
+         function resetStepsOnly() {
+             if (!imageLoaded) return;
+             stepCounter = 0;
+             updateStepDisplay();
+             transformImage(stepCounter); // Redraw at step 0
+         }
+
+
+        /** Enables the control buttons. */
+        function enableControls() {
+            nextStepButton.disabled = false;
+            resetButton.disabled = false;
+        }
+
+        /** Disables the control buttons. */
+         function disableControls() {
+            nextStepButton.disabled = true;
+            resetButton.disabled = true;
+         }
+
+
+        /**
+         * Performs the core image transformation for a specific step count.
+         * Uses the ORIGINAL formula interpretation (base target + step offset).
+         * @param {number} currentStep - The current step number to apply.
+         */
+        function transformImage(currentStep) {
+            // Ensure image data is loaded and dimensions are valid
+            if (!originalImageData || imgWidth === 0 || imgHeight === 0) {
+                 console.warn("TransformImage called without valid image data or dimensions.");
+                 return;
+            }
+
+            const originalData = originalImageData.data;
+            // Create a fresh ImageData buffer for the new frame
+            const newImageData = ctx.createImageData(imgWidth, imgHeight);
+            const newData = newImageData.data;
+
+            // Iterate through each pixel of the original image
+            for (let y = 0; y < imgHeight; y++) {
+                for (let x = 0; x < imgWidth; x++) {
+                    const originalIndex = (y * imgWidth + x) * 4;
+                    // Ensure we don't read past the buffer (though unlikely with correct loops)
+                    if (originalIndex >= originalData.length - 3) continue;
+
+                    const r = originalData[originalIndex];
+                    const g = originalData[originalIndex + 1];
+                    const b = originalData[originalIndex + 2];
+                    const a = originalData[originalIndex + 3];
+
+                    let targetX = x; // Default target is the original x position
+
+                    // Check if the original pixel is white
+                    if (isWhite(r, g, b)) {
+                        // *** ORIGINAL FORMULA IMPLEMENTATION ***
+                        // 1. Calculate the base target coordinate based on (y - x) % width
+                        const baseTargetX = positiveModulo(y - x, imgWidth);
+
+                        // 2. Calculate final targetX by adding the current step count to the base target.
+                        targetX = positiveModulo(baseTargetX + Math.floor(currentStep), imgWidth);
+                    }
+
+                    const targetY = y; // Y coordinate remains the same
+                    const targetIndex = (targetY * imgWidth + targetX) * 4;
+
+                    // Copy original pixel data to the target location in the new image data
+                    // Ensure targetIndex is within bounds
+                    if (targetIndex >= 0 && targetIndex < newData.length - 3) {
+                        newData[targetIndex]     = r;
+                        newData[targetIndex + 1] = g;
+                        newData[targetIndex + 2] = b;
+                        newData[targetIndex + 3] = a; // Preserve original alpha
+                    } else {
+                         // Log if calculation results in out-of-bounds write
+                         console.warn(`Calculated targetIndex ${targetIndex} out of bounds for pixel (x:${x}, y:${y}) -> targetX:${targetX} at step ${currentStep}`);
+                         // Fallback: Draw the pixel at its original location to avoid errors/blank spots
+                         const fallbackIndex = (y * imgWidth + x) * 4;
+                         if (fallbackIndex >= 0 && fallbackIndex < newData.length - 3) {
+                            newData[fallbackIndex] = r;
+                            newData[fallbackIndex + 1] = g;
+                            newData[fallbackIndex + 2] = b;
+                            newData[fallbackIndex + 3] = a;
+                         }
+                    }
+                }
+            }
+            // Draw the newly computed image data onto the canvas
+            ctx.putImageData(newImageData, 0, 0);
+        }
+
+
+        /** Draws the initial placeholder text on the canvas. */
+        function drawPlaceholder() {
+            ctx.fillStyle = '#ccc';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#555';
+            ctx.textAlign = 'center';
+            ctx.font = '14px sans-serif';
+            ctx.fillText('Upload a JPG or PNG image', canvas.width / 2, canvas.height / 2);
+        }
+
+        // --- Initial Setup ---
+        drawPlaceholder();
+        disableControls();
+
+    </script>
+
+</body>
+</html>
